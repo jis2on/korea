@@ -107,6 +107,9 @@ body{
 .lbl{font-size:14.5px;font-weight:700;fill:var(--ink);text-anchor:middle;pointer-events:none;
   paint-order:stroke;stroke:rgba(255,255,255,.82);stroke-width:3px;stroke-linejoin:round;opacity:0;transition:opacity .7s}
 .lbl.sm{font-size:10px;stroke-width:2.3px}
+.rgline{fill:none;stroke:#33506B;stroke-width:1.1;stroke-linejoin:round;pointer-events:none;opacity:.9}
+#map.dense .rgline{stroke-width:.9}
+#map.vdense .rgline{stroke-width:.7}
 .practice .lbl{opacity:1}
 .practice .lbl.gone{opacity:0}
 .lbl.reveal,.practice .lbl.reveal{opacity:1;fill:#fff;stroke:rgba(120,20,12,.9);transition:opacity .15s}
@@ -636,8 +639,8 @@ async function runDiagnostics(){
 const svg=document.getElementById("map"), stage=document.getElementById("stage");
 const NS="http://www.w3.org/2000/svg";
 const el=(t,a)=>{const n=document.createElementNS(NS,t);for(const k in a)n.setAttribute(k,a[k]);return n;};
-const gShapes=el("g"), gRing=el("g"), gFlags=el("g"), gLabels=el("g"), gHits=el("g");
-svg.append(gShapes,gRing,gFlags,gLabels,gHits);
+const gShapes=el("g"), gRing=el("g"), gFlags=el("g"), gLabels=el("g"), gEdges=el("g"), gHits=el("g");
+svg.append(gShapes,gRing,gFlags,gLabels,gEdges,gHits);
 let node={};
 
 function pct(vals,q){
@@ -669,7 +672,7 @@ function cropViewBox(regions, padRatio){
 /* levelIds: ["nation_sido"] 또는 ["nation_sigun"] 또는 지역 id 여러 개 조합 */
 function loadLevel(levelIds){
   CODES=[]; NAMEOF={}; node={};
-  gShapes.innerHTML=""; gRing.innerHTML=""; gFlags.innerHTML=""; gLabels.innerHTML=""; gHits.innerHTML="";
+  gShapes.innerHTML=""; gRing.innerHTML=""; gFlags.innerHTML=""; gLabels.innerHTML=""; gEdges.innerHTML=""; gHits.innerHTML="";
 
   let regions, vb, w, h;
   if(levelIds.includes("nation_sido")){
@@ -696,18 +699,37 @@ function loadLevel(levelIds){
     p.setAttribute("aria-label",r.name);
     gShapes.appendChild(p);
 
-    const t=el("text",{x:r.cx,y:r.cy+4.5,class:"lbl"+(r.r<22?" sm":"")});
+    // 지역 안에 들어갈 만큼만 크게: 폭과 내접 반지름 중 좁은 쪽에 맞춘다
+    const bw = r.bbox ? (r.bbox[2]-r.bbox[0]) : r.r*2;
+    const avail = Math.min(bw*0.92, r.r*2.2);
+    const fpx = Math.max(6.5, Math.min(15, avail / Math.max(1,r.name.length)));
+    const t=el("text",{x:r.cx,y:r.cy+fpx*0.34,class:"lbl"});
+    t.style.fontSize=fpx.toFixed(1)+"px";
+    t.style.strokeWidth=(fpx*0.24).toFixed(2)+"px";
     t.textContent=r.name; gLabels.appendChild(t);
 
+    // 글자가 덮더라도 경계선은 항상 보이도록 위에 한 번 더 그린다
+    gEdges.appendChild(el("path",{d:r.d,class:"rgline","fill-rule":"evenodd"}));
+
+    const fs2 = fscale * Math.max(0.4, Math.min(1, r.r/12));
     const g=el("g",{class:"flag",transform:`translate(${r.cx},${r.cy})`});
-    g.appendChild(el("rect",{class:"pole",x:-1.4*fscale,y:-24*fscale,width:2.8*fscale,height:26*fscale,rx:1.4*fscale}));
-    g.appendChild(el("path",{class:"cloth",d:`M ${-1*fscale} ${-24*fscale} L ${15*fscale} ${-19*fscale} L ${-1*fscale} ${-14*fscale} Z`}));
+    g.appendChild(el("rect",{class:"pole",x:-1.4*fs2,y:-24*fs2,width:2.8*fs2,height:26*fs2,rx:1.4*fs2}));
+    g.appendChild(el("path",{class:"cloth",d:`M ${-1*fs2} ${-24*fs2} L ${15*fs2} ${-19*fs2} L ${-1*fs2} ${-14*fs2} Z`}));
     gFlags.appendChild(g);
 
-    if(r.r<hitFloor)
-      gHits.appendChild(el("circle",{cx:r.cx,cy:r.cy,r:hitFloor,class:"hit","data-code":r.code}));
+    // 클릭 보조 원: 지역 크기에 비례시켜 이웃의 클릭을 빼앗지 않게 한다
+    if(r.r<hitFloor){
+      const hr=Math.max(6, Math.min(hitFloor, r.r*1.6));
+      const c=el("circle",{cx:r.cx,cy:r.cy,r:hr,class:"hit","data-code":r.code});
+      c.dataset.rr=r.r;
+      gHits.appendChild(c);
+    }
     node[r.code]={path:p,label:t,flag:g,cx:r.cx,cy:r.cy,ringMax:Math.max(18,Math.min(46,r.r*2.6))};
   });
+  // 작은 지역일수록 위로 올려서, 겹칠 때 작은 쪽이 우선 선택되게 한다
+  [...gHits.children]
+    .sort((a,b)=>Number(b.dataset.rr)-Number(a.dataset.rr))
+    .forEach(c=>gHits.appendChild(c));
   TOTAL=CODES.length;
 }
 
