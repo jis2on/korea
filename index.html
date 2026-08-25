@@ -368,7 +368,7 @@ body{
         <div id="joinSetup" hidden>
           <div class="fieldrow">
             <label>초대 코드</label>
-            <input class="codeinput long" id="joinCode" placeholder="선생님이 알려준 코드를 붙여넣으세요" autocomplete="off" autocapitalize="none" spellcheck="false">
+            <input class="codeinput" id="joinCode" maxlength="4" placeholder="예: 7GKQ" autocomplete="off" autocapitalize="characters" spellcheck="false">
           </div>
           <button class="btn" id="btnJoinCheck">확인</button>
           <p class="err" id="joinErr"></p>
@@ -377,10 +377,10 @@ body{
 
         <p class="tips"><b>조작</b> 지역을 클릭하거나 터치 · <b>스페이스</b> 멈추고 이어하기</p>
         <details class="setupbox">
-          <summary>선생님용 설정 (전체 랭킹판 만들기)</summary>
-          <p class="tips" style="margin-top:8px">전체 랭킹판을 처음 한 번만 만들어 두면, 모든 학생의 첫 화면에 누적 랭킹이 표시됩니다.</p>
-          <button class="btn ghost" id="btnMakeBoard">전체 랭킹판 만들기</button>
-          <div id="gboardSetupResult" hidden></div>
+          <summary>연결이 안 될 때 (연결 진단)</summary>
+          <p class="tips" style="margin-top:8px">대결방 만들기나 참가가 안 되면 아래를 눌러보세요. 무엇이 막혔는지 알려줍니다.</p>
+          <button class="btn ghost" id="btnDiag">연결 진단하기</button>
+          <div id="diagResult" hidden></div>
         </details>
       </div>
     </div>
@@ -407,12 +407,12 @@ body{
     <div class="veil" id="veilHost" hidden>
       <div class="card">
         <h1 class="title">친구 초대하기</h1>
-        <p class="roomsub" style="margin-top:10px"><b>가장 쉬운 방법</b> — 아래 주소를 그대로 보내주세요. 누르면 바로 입장돼요.</p>
-        <p class="roomcode" style="font-size:13px"><a id="hostLink" href="#" style="color:#C97B00;word-break:break-all">-</a></p>
-        <button class="copybtn" id="btnCopyLink" type="button">참가 링크 복사</button>
-        <p class="roomsub" style="margin-top:14px">또는 아래 코드를 직접 입력해도 됩니다.</p>
+        <p class="roomsub" style="margin-top:12px">칠판에 이 네 글자를 적어주세요. 학생들은 <b>모둠 대결 → 코드로 참가</b>에서 입력하면 됩니다.</p>
         <p class="roomcode" id="hostCode">----</p>
-        <button class="copybtn" id="btnCopyCode" type="button">코드 복사하기</button>
+        <button class="copybtn" id="btnCopyCode" type="button">코드 복사</button>
+        <p class="roomsub" style="margin-top:14px">또는 이 링크를 보내면 코드 입력 없이 바로 입장돼요.</p>
+        <p class="roomcode" style="font-size:12px"><a id="hostLink" href="#" style="color:#C97B00;word-break:break-all">-</a></p>
+        <button class="copybtn" id="btnCopyLink" type="button">참가 링크 복사</button>
         <button class="btn" id="btnHostJoin">나도 닉네임 정하고 함께 하기</button>
         <hr class="rule">
         <div class="livewrap"><span class="livedot"></span><span id="hostLiveMsg">실시간 순위 · 3초마다 새로고침</span></div>
@@ -487,53 +487,52 @@ const TEAM_COLORS=["#E14B4B","#3E8FE0","#1CAE68","#F0A000","#9A5FD0","#F08A3C"];
 const FADE_SPAN=7;
 
 /* ── 저장소(초대 대결용) ───────────────────────────────────────────
-   Claude 대화창 없이 각자 태블릿에서 접속해야 하므로, 실제 인터넷 너머의
-   공용 저장소(jsonblob.com — 가입 없이 쓸 수 있는 JSON 저장 서비스)를 씁니다.
-   방 하나 = blob 하나. 방 코드는 그 blob의 긴 식별자(16진수)입니다. ──── */
-const BLOB_API = "https://jsonblob.com/api/jsonBlob";
-let hasRoom = false; // 페이지가 뜨면 실제로 왕복 저장이 되는지 먼저 테스트해서 확정
+   각자 태블릿의 브라우저에서 접속하므로 인터넷 너머의 공용 저장소가 필요합니다.
+   textdb.dev를 씁니다 — 우리가 키(주소)를 직접 정해서 저장하고 그대로 읽어오는
+   방식이라, 응답 헤더를 읽을 필요가 없어 브라우저 보안정책(CORS)에 막히지 않습니다.
+   덕분에 방 코드도 짧은 4자리로 쓸 수 있습니다.                        ──── */
+const KV_BASE = "https://textdb.dev/api/data/";
+const KEY_PREFIX = "korea-map-game-v1-";
+const GLOBAL_KEY = KEY_PREFIX + "global-ranking";
+let hasRoom = false;      // 실제 왕복 저장이 되는지 확인되면 true
+let lastKvError = "";     // 마지막 실패 원인 (진단용)
 
-async function blobCreate(data){
-  try{
-    const res = await fetch(BLOB_API, {method:"POST",
-      headers:{"Content-Type":"application/json","Accept":"application/json"},
-      body: JSON.stringify(data)});
-    if(!res.ok) return null;
-    const loc = res.headers.get("Location") || res.headers.get("location");
-    if(!loc) return null;
-    const id = loc.split("/").filter(Boolean).pop();
-    return id || null;
-  }catch(e){ return null; }
-}
-async function blobGet(id){
-  try{
-    const res = await fetch(`${BLOB_API}/${id}`, {headers:{"Accept":"application/json"}});
-    if(!res.ok) return null;
-    return await res.json();
-  }catch(e){ return null; }
-}
-async function blobPut(id, data){
-  try{
-    const res = await fetch(`${BLOB_API}/${id}`, {method:"PUT",
-      headers:{"Content-Type":"application/json","Accept":"application/json"},
-      body: JSON.stringify(data)});
-    return res.ok;
-  }catch(e){ return false; }
-}
-async function blobDelete(id){ try{ await fetch(`${BLOB_API}/${id}`, {method:"DELETE"}); }catch(e){} }
+function roomKey(code){ return KEY_PREFIX + "room-" + String(code||"").toUpperCase(); }
 
-/* 방 코드를 사람이 입력한(또는 붙여넣은) 텍스트에서 뽑아낸다 (하이픈 포함 붙여넣기도 허용) */
+async function kvGet(key){
+  try{
+    const res = await fetch(KV_BASE + encodeURIComponent(key) + "?t=" + Date.now(),
+      {cache:"no-store"});
+    if(!res.ok){ lastKvError = "읽기 응답 " + res.status; return null; }
+    const txt = (await res.text() || "").trim();
+    if(!txt) return null;
+    try{ return JSON.parse(txt); }catch(e){ return null; }
+  }catch(e){ lastKvError = "읽기 실패: " + (e && e.message || e); return null; }
+}
+async function kvSet(key, obj){
+  try{
+    const res = await fetch(KV_BASE + encodeURIComponent(key), {
+      method:"POST",
+      headers:{"Content-Type":"text/plain"},
+      body: JSON.stringify(obj)});
+    if(!res.ok){ lastKvError = "저장 응답 " + res.status; return false; }
+    return true;
+  }catch(e){ lastKvError = "저장 실패: " + (e && e.message || e); return false; }
+}
+
+/* 사람이 읽고 입력하기 쉬운 4자리 코드 (헷갈리는 0/O/1/I 제외) */
+const CODE_ABC = "ABCDEFGHJKMNPQRSTUVWXYZ23456789";
+function makeCode(){
+  let s=""; for(let i=0;i<4;i++) s += CODE_ABC[Math.floor(Math.random()*CODE_ABC.length)];
+  return s;
+}
+/* 붙여넣은 문장이나 링크 속에서도 코드만 뽑아낸다 */
 function extractRoomCode(text){
-  text=(text||"").trim();
-  let m=text.match(/[a-f0-9]{4}(?:-[a-f0-9]{4}){5}/i);
-  if(m) return m[0].replace(/-/g,"").toLowerCase();
-  m=text.match(/[a-f0-9]{24}/i);
-  if(m) return m[0].toLowerCase();
-  return text.replace(/[^a-fA-F0-9]/g,"").toLowerCase();
+  text=(text||"").trim().toUpperCase();
+  const m = text.match(/[ABCDEFGHJKMNPQRSTUVWXYZ23456789]{4}/);
+  return m ? m[0] : text.replace(/[^A-Z0-9]/g,"").slice(0,4);
 }
-function formatCode(id){
-  return id ? id.match(/.{1,4}/g).join("-") : "";
-}
+function formatCode(id){ return id ? String(id).toUpperCase() : ""; }
 
 function hash32(str){ let h=2166136261; for(let i=0;i<str.length;i++){ h^=str.charCodeAt(i); h=Math.imul(h,16777619); } return h>>>0; }
 function mulberry32(a){ return function(){ a|=0;a=a+0x6D2B79F5|0; let t=Math.imul(a^a>>>15,1|a); t=t+Math.imul(t^t>>>7,61|t)^t; return ((t^t>>>14)>>>0)/4294967296; }; }
@@ -556,29 +555,23 @@ function localScoreHtml(score){
   return `<p class="tips" style="margin-top:14px">이 기기 최고 기록 <b>${best.toLocaleString()}점</b>${score>=best?" · 방금 새 기록을 세웠어요!":""}</p>`;
 }
 
-/* ── 전체 랭킹판(모든 기기의 기록) ──────────────────────────────
-   jsonblob 하나를 "전체 랭킹판"으로 고정해서 씁니다. 이 파일을 처음
-   배포할 때 아래 GLOBAL_BOARD_ID를 한 번 채워 넣어야 모두에게 보입니다.
-   (시작 화면의 "전체 랭킹판 만들기" 버튼이 자동으로 만들어 줍니다.)     */
-let GLOBAL_BOARD_ID = "";
+/* ── 전체 랭킹판 ────────────────────────────────────────────────
+   고정된 키 하나를 모두가 함께 씁니다. 별도 설정이 필요 없습니다.    */
 async function pushGlobalScore(name,score){
-  if(!GLOBAL_BOARD_ID||!hasRoom||score<=0) return;
-  try{
-    const doc=(await blobGet(GLOBAL_BOARD_ID))||{scores:[]};
-    doc.scores=doc.scores||[];
-    doc.scores.push({name:(name||"이름 없음").slice(0,12),score,ts:Date.now()});
-    doc.scores.sort((a,b)=>b.score-a.score);
-    doc.scores=doc.scores.slice(0,50);
-    await blobPut(GLOBAL_BOARD_ID, doc);
-    refreshGlobalBoard();
-  }catch(e){}
+  if(score<=0) return;
+  const doc=(await kvGet(GLOBAL_KEY))||{scores:[]};
+  doc.scores=doc.scores||[];
+  doc.scores.push({name:(name||"이름 없음").slice(0,12),score,ts:Date.now()});
+  doc.scores.sort((a,b)=>b.score-a.score);
+  doc.scores=doc.scores.slice(0,100);
+  await kvSet(GLOBAL_KEY, doc);
+  refreshGlobalBoard();
 }
 async function refreshGlobalBoard(){
   const wrap=document.getElementById("gboardWrap");
-  if(!GLOBAL_BOARD_ID){ wrap.hidden=true; return; }
   wrap.hidden=false;
   const list=document.getElementById("gboardList");
-  const doc=await blobGet(GLOBAL_BOARD_ID);
+  const doc=await kvGet(GLOBAL_KEY);
   const scores=(doc&&doc.scores)||[];
   document.getElementById("gboardSub").textContent=scores.length?`지금까지 ${scores.length}명 참여`:"";
   list.innerHTML = globalRankHtml(scores);
@@ -593,41 +586,34 @@ function globalRankHtml(scores){
 /* 모둠 대결 화면에도 전체 랭킹을 함께 띄운다 */
 async function refreshGlobalBoardInto(elId){
   const box=document.getElementById(elId); if(!box) return;
-  if(!GLOBAL_BOARD_ID){ box.hidden=true; return; }
-  const doc=await blobGet(GLOBAL_BOARD_ID);
+  const doc=await kvGet(GLOBAL_KEY);
   const scores=(doc&&doc.scores)||[];
   box.hidden=false;
   box.innerHTML=`<div class="gboard-head"><span>🏆 전체 랭킹</span><span class="gboard-sub">${scores.length?`지금까지 ${scores.length}명 참여`:""}</span></div>`+globalRankHtml(scores);
 }
-async function makeGlobalBoard(){
-  const btn=document.getElementById("btnMakeBoard");
-  btn.disabled=true; btn.textContent="만드는 중...";
-  let id=null, reason="";
-  try{ id=await blobCreate({scores:[]}); }catch(e){ reason=String(e&&e.message||e); }
-  btn.disabled=false; btn.textContent="전체 랭킹판 만들기";
-  const box=document.getElementById("gboardSetupResult");
+
+/* ── 연결 진단 (문제가 생겼을 때 원인을 직접 보여준다) ── */
+async function runDiagnostics(){
+  const box=document.getElementById("diagResult");
   box.hidden=false;
-  if(!id){
-    box.innerHTML=`<p class="err">만들지 못했어요.${reason?" ("+reason+")":""}<br>
-      <small style="color:var(--sub);font-weight:400">인터넷 연결이 필요합니다. 학교 네트워크가 jsonblob.com을 막고 있을 수도 있어요.</small></p>`;
-    return;
+  box.innerHTML='<p class="tips"><span class="spin"></span>확인하는 중...</p>';
+  const lines=[];
+  const testKey=KEY_PREFIX+"selftest-"+Math.random().toString(36).slice(2,8);
+  const payload={hello:"world",ts:Date.now()};
+  lastKvError="";
+  const wrote=await kvSet(testKey,payload);
+  lines.push(wrote ? "✅ 저장하기 성공" : "❌ 저장하기 실패 — "+(lastKvError||"알 수 없음"));
+  let readOk=false;
+  if(wrote){
+    const back=await kvGet(testKey);
+    readOk = !!(back && back.hello==="world");
+    lines.push(readOk ? "✅ 다시 읽어오기 성공" : "❌ 다시 읽어오기 실패 — "+(lastKvError||"내용이 다름"));
   }
-  GLOBAL_BOARD_ID=id;
-  const u=new URL(location.href); u.hash=""; u.search="";
-  u.searchParams.set("board", id);
-  const boardLink=u.toString();
-  box.innerHTML=`<p class="tips">두 가지 방법 중 하나를 쓰세요.<br>
-    <b>①(가장 쉬움)</b> 아래 주소를 학생들에게 알려주면, 그 주소로 들어온 모두에게 랭킹판이 보입니다.<br>
-    <b>②</b> 아래 코드를 이 파일의 <code>GLOBAL_BOARD_ID = ""</code> 안에 붙여넣고 GitHub에 다시 올리면, 기본 주소에서도 항상 보입니다.</p>
-    <p class="roomcode" style="font-size:13px">${boardLink}</p>
-    <button class="copybtn" id="btnCopyBoardLink" type="button">① 주소 복사</button>
-    <p class="roomcode" style="font-size:13px">${id}</p>
-    <button class="copybtn" id="btnCopyBoardId" type="button">② 코드만 복사</button>`;
-  const cp=(txt)=>{ if(navigator.clipboard&&navigator.clipboard.writeText)
-      navigator.clipboard.writeText(txt).then(()=>toast("복사했어요"),()=>toast("복사 실패 — 직접 선택해 주세요")); };
-  document.getElementById("btnCopyBoardLink").onclick=()=>cp(boardLink);
-  document.getElementById("btnCopyBoardId").onclick=()=>cp(id);
-  refreshGlobalBoard();
+  hasRoom = wrote && readOk;
+  lines.push(hasRoom ? "<b>대결 기능을 쓸 수 있어요.</b>"
+    : "<b>대결 기능이 지금은 안 됩니다.</b> 위 오류 내용을 알려주시면 원인을 찾을 수 있어요.");
+  lines.push('<small style="color:var(--sub)">저장소: '+KV_BASE+'</small>');
+  box.innerHTML='<p class="tips">'+lines.join("<br>")+'</p>';
 }
 
 /* ── 지도 그리기 ───────────────────────── */
@@ -1014,13 +1000,19 @@ async function hostCreate(){
   err.textContent="";
   const seed=Math.floor(Math.random()*4294967295);
   const pendingCfg={speed:cfg.speed,levelIds:cfg.levelIds,seed,ts:Date.now()};
-  let id=null, reason="";
-  try{ id=await blobCreate({cfg:pendingCfg,teams:{}}); }
-  catch(e){ reason=String(e&&e.message||e); }
+  lastKvError="";
+  let id=null;
+  for(let attempt=0; attempt<5 && !id; attempt++){
+    const cand=makeCode();
+    const exists=await kvGet(roomKey(cand));
+    if(exists && exists.cfg) continue;               // 이미 쓰는 코드면 다시 뽑는다
+    const ok=await kvSet(roomKey(cand), {cfg:pendingCfg, teams:{}});
+    if(ok) id=cand;
+  }
   btn.disabled=false; btn.textContent=label;
   if(!id){
-    err.innerHTML="방을 만들지 못했어요."+(reason?" ("+reason+")":"")+
-      "<br><small style='color:var(--sub);font-weight:400'>인터넷 연결이 필요합니다. 학교 네트워크가 jsonblob.com을 막고 있을 수도 있어요. 그럴 땐 <b>혼자 도전</b>으로 차례차례 겨뤄 보세요.</small>";
+    err.innerHTML="방을 만들지 못했어요."+(lastKvError?" ("+lastKvError+")":"")+
+      "<br><small style='color:var(--sub);font-weight:400'>인터넷 연결을 확인해 주세요. 아래 <b>⚙ 선생님용 설정 → 연결 진단</b>을 누르면 원인을 자세히 볼 수 있어요.</small>";
     return;
   }
   room.id=id; room.pendingCfg=pendingCfg; room.cameFromHost=false;
@@ -1037,15 +1029,12 @@ function roomLink(id){
   const u=new URL(location.href);
   u.hash=""; u.search="";
   u.searchParams.set("room", id);
-  if(GLOBAL_BOARD_ID) u.searchParams.set("board", GLOBAL_BOARD_ID);
   return u.toString();
 }
 /* URL의 ?room= / ?board= 를 읽어 자동 입장·랭킹판 연결 */
 function handleUrlParams(){
   let params;
   try{ params=new URLSearchParams(location.search); }catch(e){ return; }
-  const b=params.get("board");
-  if(b && !GLOBAL_BOARD_ID){ GLOBAL_BOARD_ID=b; refreshGlobalBoard(); }
   const r=params.get("room");
   if(r){
     document.getElementById("optMode").querySelector('[data-v="team"]').click();
@@ -1057,7 +1046,7 @@ function handleUrlParams(){
 async function hostJoinAsTeam(){
   stopPoll();
   room.cameFromHost=true;
-  const doc=await blobGet(room.id);
+  const doc=await kvGet(roomKey(room.id));
   const used=Object.values(doc?.teams||{}).map(t=>t.color);
   buildColorSwatches(used);
   document.getElementById("joinRoomInfo").textContent=`${formatCode(room.id)} 방에 참가합니다`;
@@ -1065,7 +1054,7 @@ async function hostJoinAsTeam(){
   show("veilJoinName");
 }
 async function refreshHostBoard(){
-  const doc=await blobGet(room.id);
+  const doc=await kvGet(roomKey(room.id));
   if(!doc){ document.getElementById("hostLiveMsg").textContent="연결이 끊겼어요 · 다시 시도 중..."; return; }
   const teams=Object.values(doc.teams||{});
   teams.sort((a,b)=>b.score-a.score||b.ok-a.ok);
@@ -1081,13 +1070,13 @@ async function joinCheck(){
   const raw=document.getElementById("joinCode").value||"";
   const id=extractRoomCode(raw);
   const errEl=document.getElementById("joinErr");
-  if(id.length<20){ errEl.textContent="코드를 다시 확인해 주세요 (전체를 붙여넣어도 됩니다)."; return; }
+  if(id.length!==4){ errEl.textContent="네 자리 코드를 입력해 주세요."; return; }
   errEl.innerHTML='<span class="spin"></span>확인하는 중...';
-  let doc=null, reason="";
-  try{ doc=await blobGet(id); }catch(e){ reason=String(e&&e.message||e); }
-  if(!doc){
-    errEl.innerHTML="코드를 찾을 수 없어요."+(reason?" ("+reason+")":"")+
-      "<br><small style='color:var(--sub);font-weight:400'>코드를 다시 확인하거나, 방을 만든 사람이 준 <b>참가 링크</b>를 눌러서 들어와 보세요. 인터넷 연결도 확인해 주세요.</small>";
+  lastKvError="";
+  const doc=await kvGet(roomKey(id));
+  if(!doc || !doc.cfg){
+    errEl.innerHTML="그 코드로 만들어진 방이 없어요."+(lastKvError?" ("+lastKvError+")":"")+
+      "<br><small style='color:var(--sub);font-weight:400'>코드를 다시 확인하거나, 방을 만든 사람이 준 <b>참가 링크</b>를 눌러서 들어와 보세요.</small>";
     return;
   }
   errEl.textContent="";
@@ -1135,16 +1124,16 @@ async function joinStart(){
 /* 읽기→내 팀 항목만 갱신→쓰기 (다른 팀 점수를 덮어쓰지 않도록) */
 async function putTeam(teamData){
   if(!room.id||!room.teamId) return false;
-  const doc=(await blobGet(room.id)) || {cfg:room.pendingCfg,teams:{}};
+  const doc=(await kvGet(roomKey(room.id))) || {cfg:room.pendingCfg,teams:{}};
   doc.teams=doc.teams||{};
   doc.teams[room.teamId]=teamData;
-  return await blobPut(room.id, doc);
+  return await kvSet(roomKey(room.id), doc);
 }
 let miniPollT=null;
 function stopMiniPoll(){ clearInterval(miniPollT); miniPollT=null; }
 async function refreshMini(){
   if(!room.id) return;
-  const doc=await blobGet(room.id); if(!doc) return;
+  const doc=await kvGet(roomKey(room.id)); if(!doc) return;
   const teams=Object.values(doc.teams||{});
   teams.sort((a,b)=>b.score-a.score||b.ok-a.ok);
   const box=document.getElementById("miniBoard");
@@ -1173,7 +1162,7 @@ async function showJoinResult(r){
   pushGlobalScore(room.teamName, room.best);
 }
 async function refreshJoinBoard(){
-  const doc=await blobGet(room.id); if(!doc) return;
+  const doc=await kvGet(roomKey(room.id)); if(!doc) return;
   const teams=Object.values(doc.teams||{});
   teams.sort((a,b)=>b.score-a.score||b.ok-a.ok);
   jbRank.innerHTML=teams.map((t,i)=>`<div class="rk${i?"":" first"}${t.name===room.teamName&&t.color===room.teamColor?" me":""}">
@@ -1247,7 +1236,7 @@ btnStartSolo.onclick=()=>{
   loadLevel(cfg.levelIds); newRun("solo",{teamColor:"#F0B429"}); startPlay(); startMusic();
   document.getElementById("miniBoard").hidden=true; stopMiniPoll();
 };
-btnMakeBoard.onclick=makeGlobalBoard;
+btnDiag.onclick=runDiagnostics;
 btnHostCreate.onclick=hostCreate;
 btnJoinCheck.onclick=joinCheck;
 btnJoinBack.onclick=()=>{
@@ -1267,6 +1256,7 @@ btnJoinAgain.onclick=()=>{
   refreshMini(); stopMiniPoll(); miniPollT=setInterval(refreshMini,4000);
 };
 btnJoinHome.onclick=()=>{ stopPoll(); stopMiniPoll(); document.getElementById("miniBoard").hidden=true; document.getElementById("uiTeam").hidden=true; mode="start"; show("veilStart"); };
+joinCode.addEventListener("input",()=>{ joinCode.value=joinCode.value.toUpperCase().replace(/[^A-Z0-9]/g,""); });
 joinCode.addEventListener("keydown",e=>{ if(e.key==="Enter") joinCheck(); });
 btnCopyLink.onclick=()=>{
   const link=roomLink(room.id||"");
@@ -1310,10 +1300,6 @@ addEventListener("resize",()=>{ Z=null; tiles.forEach(t=>{t.w=t.el.offsetWidth;t
 
 document.body.classList.add("practice");
 (async()=>{
-  try{
-    const id=await blobCreate({selftest:true,ts:Date.now()});
-    if(id){ const back=await blobGet(id); hasRoom=!!back; blobDelete(id); }
-  }catch(e){ hasRoom=false; }
   refreshGlobalBoard();
   handleUrlParams();
 })();
